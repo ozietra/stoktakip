@@ -2,17 +2,18 @@ const { Sequelize } = require('sequelize');
 const path = require('path');
 require('dotenv').config();
 
-// Veritabanı tipini belirle (Electron ise SQLite, yoksa MySQL)
+// Veritabanı tipini belirle (DB_TYPE env var, Electron kontrolü, veya varsayılan MySQL)
+const dbType = process.env.DB_TYPE;
 const isElectron = process.env.IS_ELECTRON === 'true' || process.versions.electron;
-const dbDialect = isElectron ? 'sqlite' : 'mysql';
+const dbDialect = dbType || (isElectron ? 'sqlite' : 'mysql');
 
 console.log(`🔌 Veritabanı tipi: ${dbDialect.toUpperCase()}`);
 
 let sequelize;
 
 if (dbDialect === 'sqlite') {
-  // SQLite için yapılandırma (.exe versiyonu)
-  const dbPath = process.env.SQLITE_DB_PATH || path.join(
+  // SQLite için yapılandırma (.exe versiyonu veya Railway)
+  const dbPath = process.env.DB_PATH || process.env.SQLITE_DB_PATH || path.join(
     process.env.USERDATA_PATH || __dirname,
     'stok_yonetim.db'
   );
