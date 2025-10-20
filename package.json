@@ -1,0 +1,123 @@
+{
+  "name": "stok-yonetim-sistemi",
+  "version": "1.0.0",
+  "description": "Gelişmiş Stok ve Envanter Yönetim Sistemi",
+  "main": "electron-main.js",
+  "author": "Stok Yönetim",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "scripts": {
+    "electron": "electron .",
+    "electron-dev": "concurrently \"cd frontend && npm start\" \"wait-on http://localhost:3000 && electron .\"",
+    "build": "npm run build:frontend && npm run build:electron",
+    "build:frontend": "cd frontend && npm run build",
+    "build:electron": "electron-builder",
+    "build:win": "electron-builder --win --x64",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux",
+    "rebuild": "npm run clean && npm run build",
+    "clean": "rimraf dist",
+    "postinstall": "electron-builder install-app-deps && cd backend && npm install --production",
+    "build:web": "cd frontend && npm run build && xcopy /E /I /Y build ..\\backend\\public",
+    "start:web": "cd backend && set NODE_ENV=production&& node server.js",
+    "dev:web": "concurrently \"cd frontend && npm start\" \"cd backend && npm start\""
+  },
+  "build": {
+    "appId": "com.stokyonetim.app",
+    "productName": "Stok Yönetim Sistemi",
+    "asar": true,
+    "asarUnpack": [
+      "backend/**/*"
+    ],
+    "directories": {
+      "buildResources": "assets",
+      "output": "dist"
+    },
+    "files": [
+      "electron-main.js",
+      "!portable-mysql/**/*",
+      "!electron-mysql-manager.js"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Stok Yönetim Sistemi",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico"
+    },
+    "portable": {
+      "artifactName": "StokYonetim-Portable.exe"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.business"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "assets/icon.png",
+      "category": "Office"
+    },
+    "extraResources": [
+      {
+        "from": "frontend/build",
+        "to": "frontend",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!.env",
+          "!uploads/**/*",
+          "!data/**/*",
+          "!stok_yonetim.db"
+        ]
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-is-dev": "^2.0.0",
+    "mysql2": "^3.15.2"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1",
+    "rimraf": "^5.0.5",
+    "wait-on": "^7.2.0"
+  }
+}

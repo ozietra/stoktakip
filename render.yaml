@@ -1,0 +1,50 @@
+# Render.com Deployment Configuration
+# Ücretsiz hosting için: https://render.com
+
+services:
+  # Backend + Frontend (Web Version)
+  - type: web
+    name: stok-yonetim-web
+    env: node
+    region: frankfurt  # En yakın bölge
+    plan: free  # Ücretsiz plan
+    buildCommand: npm install && cd frontend && npm install && npm run build && cd ../backend && npm install && npm run build
+    startCommand: cd backend && node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DB_HOST
+        fromDatabase:
+          name: stok-mysql
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: stok-mysql
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: stok-mysql
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: stok-mysql
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: stok-mysql
+          property: password
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_EXPIRE
+        value: 7d
+      - key: JWT_REFRESH_EXPIRE
+        value: 30d
+
+databases:
+  # MySQL Database (Free tier: 256MB)
+  - name: stok-mysql
+    databaseName: stok_yonetim
+    user: stok_user
+    plan: free  # Ücretsiz MySQL

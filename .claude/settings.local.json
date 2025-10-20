@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(\"C:\\wamp64\\www\\stok\\dist\\win-unpacked\\Stok Yönetim Sistemi.exe\")",
+      "Bash(dir \"C:\\wamp64\\www\\stok\\dist\\win-unpacked\" /b)",
+      "Bash(taskkill //F //IM \"Stok Yönetim Sistemi.exe\")",
+      "Bash(dir /b)",
+      "Bash(dir \"C:\\wamp64\\www\\stok\\dist\\win-unpacked\\resources\" /b)",
+      "Bash(npm run build)",
+      "Bash(npm run dist)",
+      "Bash(npm run)",
+      "Bash(npm run build:electron)",
+      "Bash(dir \"C:\\wamp64\\www\\stok\\dist\\win-unpacked\\resources\\frontend\\static\\js\" /b)",
+      "Bash(xcopy /E /I /Y \"C:\\wamp64\\www\\stok\\frontend\\build\" \"C:\\wamp64\\www\\stok\\backend\\public\")",
+      "Bash(find . -maxdepth 1 -type f -exec cp {} \"/c/wamp64/www/stok/hosting/backend/\" ;)",
+      "Bash(find . -maxdepth 1 -type d ! -name '.' ! -name 'node_modules' ! -name 'uploads' -exec cp -r {} \"/c/wamp64/www/stok/hosting/backend/\" ;)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
