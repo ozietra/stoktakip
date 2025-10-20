@@ -8,6 +8,7 @@ require('dotenv').config();
 
 const { sequelize, testConnection } = require('./config/database');
 const cronJobs = require('./utils/cronJobs');
+const { handleDatabaseError, checkDatabaseHealth } = require('./middleware/dbErrorHandler');
 
 // Modelleri yükle
 require('./models');
@@ -46,6 +47,9 @@ if (process.env.NODE_ENV === 'production') {
 } else {
   console.log('⚠️  Rate limiting devre dışı (development mode)');
 }
+
+// Database health check middleware for API routes
+app.use('/api', checkDatabaseHealth);
 
 // Static files
 app.use('/uploads', express.static('uploads'));
@@ -107,10 +111,14 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-// Error handler
+// Database error handler (must be before general error handler)
+app.use(handleDatabaseError);
+
+// General error handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('🔥 Unhandled error:', err.stack);
   res.status(err.status || 500).json({
+    success: false,
     message: err.message || 'Sunucu hatası',
     error: process.env.NODE_ENV === 'development' ? err : {}
   });
@@ -198,7 +206,7 @@ const startServer = async () => {
     server.keepAliveTimeout = 65000; // 65 seconds
     server.headersTimeout = 66000; // Must be greater than keepAliveTimeout
 
-    // Graceful shutdown - Railway deployment için optimize edildi
+    // Enhanced graceful shutdown with better connection management
     let isShuttingDown = false;
     
     const gracefulShutdown = async (signal) => {
@@ -210,22 +218,32 @@ const startServer = async () => {
       isShuttingDown = true;
       console.log(`\n${signal} alındı. Sunucu kapatılıyor...`);
       
-      // Railway deployment sırasında SIGTERM normal, hemen kapatma
+      // Don't close database connections during Railway deployments
       if (signal === 'SIGTERM' && process.env.RAILWAY_ENVIRONMENT) {
-        console.log('Railway deployment tespit edildi, hızlı kapatma...');
+        console.log('Railway deployment tespit edildi, database bağlantıları korunuyor...');
+        // Just exit without closing database connections
         process.exit(0);
         return;
       }
       
+      // For normal shutdowns, wait for active requests to complete
       server.close(async () => {
         console.log('HTTP sunucusu kapatıldı');
         
         try {
-          // Database bağlantısını sadece gerçek kapatma durumunda kapat
-          if (signal !== 'SIGTERM' || !process.env.RAILWAY_ENVIRONMENT) {
+          // Wait a bit for any pending database operations to complete
+          console.log('Aktif veritabanı işlemlerinin tamamlanması bekleniyor...');
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          // Only close database connections for non-Railway shutdowns
+          if (!process.env.RAILWAY_ENVIRONMENT) {
+            console.log('Veritabanı bağlantıları kapatılıyor...');
             await sequelize.close();
             console.log('Veritabanı bağlantısı kapatıldı');
+          } else {
+            console.log('Railway ortamı - veritabanı bağlantıları açık bırakılıyor');
           }
+          
           process.exit(0);
         } catch (error) {
           console.error('Kapatma hatası:', error);
@@ -233,24 +251,24 @@ const startServer = async () => {
         }
       });
 
-      // Force close after 15 seconds (Railway için daha uzun)
+      // Increased timeout for Railway deployments
+      const shutdownTimeout = process.env.RAILWAY_ENVIRONMENT ? 30000 : 15000;
       setTimeout(() => {
-        console.error('Zorla kapatılıyor...');
+        console.error(`Zorla kapatılıyor (${shutdownTimeout/1000}s timeout)...`);
         process.exit(1);
-      }, 15000);
+      }, shutdownTimeout);
     };
 
-    // Railway deployment sırasında SIGTERM'i daha toleranslı handle et
+    // More conservative SIGTERM handling
     process.on('SIGTERM', () => {
-      if (process.env.RAILWAY_ENVIRONMENT) {
-        console.log('Railway SIGTERM alındı, deployment devam ediyor...');
-        // Railway deployment sırasında database bağlantısını kapatma
-        return;
-      }
+      console.log('SIGTERM alındı...');
       gracefulShutdown('SIGTERM');
     });
     
-    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+    process.on('SIGINT', () => {
+      console.log('SIGINT alındı...');
+      gracefulShutdown('SIGINT');
+    });
 
     // Handle uncaught exceptions
     process.on('uncaughtException', (error) => {

@@ -81,19 +81,23 @@ if (dbDialect === 'sqlite') {
       dialect: 'mysql',
       logging: process.env.NODE_ENV === 'development' ? console.log : false,
 
-      // Connection pool - increased timeouts for better stability
+      // Connection pool - optimized for stability and performance
       pool: {
-        max: 10,
-        min: 2,
-        acquire: 60000,
-        idle: 10000,
-        evict: 10000
+        max: 20,        // Increased max connections
+        min: 5,         // Increased min connections
+        acquire: 120000, // 2 minutes to acquire connection
+        idle: 300000,   // 5 minutes idle timeout (much more forgiving)
+        evict: 60000,   // 1 minute eviction interval
+        handleDisconnects: true,
+        validate: (connection) => {
+          return connection && !connection._closing;
+        }
       },
 
-      // Retry logic for connection failures
+      // Enhanced retry logic for connection failures
       retry: {
-        max: 5,
-        timeout: 3000,
+        max: 8,
+        timeout: 5000,
         match: [
           /ECONNREFUSED/,
           /ETIMEDOUT/,
@@ -103,8 +107,15 @@ if (dbDialect === 'sqlite') {
           /SequelizeHostNotFoundError/,
           /SequelizeHostNotReachableError/,
           /SequelizeInvalidConnectionError/,
-          /SequelizeConnectionTimedOutError/
+          /SequelizeConnectionTimedOutError/,
+          /ConnectionManager\.getConnection was called after the connection manager was closed/
         ]
+      },
+
+      // Additional connection options for stability
+      dialectOptions: {
+        connectTimeout: 120000, // 2 minutes
+        // Removed invalid options that cause warnings in MySQL2
       },
 
       // Timezone ayarı
@@ -122,13 +133,44 @@ if (dbDialect === 'sqlite') {
   );
 }
 
-// Veritabanı bağlantısını test et
+// Connection health monitoring
+let connectionHealthy = true;
+let lastHealthCheck = Date.now();
+
+const checkConnectionHealth = async () => {
+  try {
+    await sequelize.authenticate();
+    if (!connectionHealthy) {
+      console.log('✅ Veritabanı bağlantısı yeniden sağlandı');
+      connectionHealthy = true;
+    }
+    lastHealthCheck = Date.now();
+    return true;
+  } catch (error) {
+    if (connectionHealthy) {
+      console.error('❌ Veritabanı bağlantısı kesildi:', error.message);
+      connectionHealthy = false;
+    }
+    return false;
+  }
+};
+
+// Periodic health check (every 30 seconds)
+setInterval(checkConnectionHealth, 30000);
+
+// Enhanced connection test with health monitoring
 const testConnection = async (retries = 5) => {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       console.log(`🔍 Veritabanı bağlantısı test ediliyor... (Deneme ${attempt}/${retries})`);
 
       await sequelize.authenticate();
+
+      // Test connection pool
+      if (dbDialect === 'mysql') {
+        const pool = sequelize.connectionManager.pool;
+        console.log(`📊 Connection Pool Status: ${pool.used}/${pool.size} kullanımda`);
+      }
 
       if (dbDialect === 'sqlite') {
         console.log('✅ SQLite veritabanı bağlantısı başarılı!');
@@ -138,9 +180,24 @@ const testConnection = async (retries = 5) => {
         console.log(`📁 Veritabanı: ${sequelize.config.database} @ ${sequelize.config.host}:${sequelize.config.port}`);
       }
 
+      connectionHealthy = true;
+      lastHealthCheck = Date.now();
       return true;
     } catch (error) {
       console.error(`❌ Bağlantı denemesi ${attempt}/${retries} başarısız:`, error.message);
+
+      // Check for specific connection manager error
+      if (error.message && error.message.includes('ConnectionManager.getConnection was called after the connection manager was closed')) {
+        console.error('🔧 Connection Manager kapatılmış - yeniden başlatma gerekiyor');
+        
+        // Try to recreate the connection manager
+        try {
+          await sequelize.connectionManager.initPools();
+          console.log('✅ Connection Manager yeniden başlatıldı');
+        } catch (recreateError) {
+          console.error('❌ Connection Manager yeniden başlatılamadı:', recreateError.message);
+        }
+      }
 
       // Son deneme ise, detaylı hata göster
       if (attempt === retries) {
@@ -159,12 +216,14 @@ const testConnection = async (retries = 5) => {
           console.log('2. Port numarasını kontrol edin (varsayılan: 3306)');
           console.log('3. Kullanıcı adı ve şifresini kontrol edin');
           console.log('4. Veritabanının oluşturulduğundan emin olun');
+          console.log('5. Connection pool ayarlarını kontrol edin');
         } else {
           console.log('\n🔧 Olası Çözümler:');
           console.log('1. Veritabanı dosyası için yazma izinlerini kontrol edin');
           console.log('2. Dizinin var olduğundan emin olun');
         }
 
+        connectionHealthy = false;
         return false;
       }
 
@@ -178,4 +237,42 @@ const testConnection = async (retries = 5) => {
   return false;
 };
 
-module.exports = { sequelize, testConnection, dbDialect };
+// Connection recovery function
+const recoverConnection = async () => {
+  console.log('🔄 Veritabanı bağlantısı kurtarılmaya çalışılıyor...');
+  
+  try {
+    // Close existing connections
+    await sequelize.close();
+    console.log('📴 Mevcut bağlantılar kapatıldı');
+    
+    // Wait a bit
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Reinitialize connection
+    await sequelize.authenticate();
+    console.log('✅ Veritabanı bağlantısı kurtarıldı');
+    
+    connectionHealthy = true;
+    return true;
+  } catch (error) {
+    console.error('❌ Bağlantı kurtarma başarısız:', error.message);
+    return false;
+  }
+};
+
+// Get connection status
+const getConnectionStatus = () => ({
+  healthy: connectionHealthy,
+  lastCheck: lastHealthCheck,
+  timeSinceLastCheck: Date.now() - lastHealthCheck
+});
+
+module.exports = { 
+  sequelize, 
+  testConnection, 
+  dbDialect, 
+  checkConnectionHealth, 
+  recoverConnection, 
+  getConnectionStatus 
+};
