@@ -1,447 +1,9 @@
-<?php
-session_start();
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-
-// Kurulum kilidi kontrolü
-$lockFile = __DIR__ . '/backend/.install_lock';
-if (file_exists($lockFile) && !isset($_GET['force'])) {
-    ?>
-    <!DOCTYPE html>
-    <html lang="tr">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Stok Yönetim Sistemi - Kurulum</title>
-        <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-        .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 700px;
-            width: 100%;
-            overflow: hidden;
-        }
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 40px;
-            text-align: center;
-        }
-        .content {
-            padding: 40px;
-        }
-        .alert {
-            padding: 15px 20px;
-            border-radius: 8px;
-            margin-bottom: 25px;
-            font-size: 14px;
-        }
-        .alert-warning {
-            background: #fff3cd;
-            color: #856404;
-            border: 1px solid #ffeaa7;
-        }
-        .btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 14px 30px;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-block;
-            margin-top: 20px;
-        }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>⚠️ Kurulum Tamamlanmış</h1>
-            </div>
-            <div class="content">
-                <div class="alert alert-warning">
-                    <strong>Dikkat!</strong> Bu sistem zaten kurulmuş görünüyor.
-                </div>
-                <p>Eğer yeniden kurulum yapmak istiyorsanız, <code>backend/.install_lock</code> dosyasını silin.</p>
-                <a href="backend/public/index.html" class="btn">Ana Sayfaya Git</a>
-            </div>
-        </div>
-    </body>
-    </html>
-    <?php
-    exit;
-}
-
-$currentStep = isset($_GET['step']) ? (int)$_GET['step'] : 1;
-
-// POST işlemlerini ÖNCE handle et (header gönderimi için)
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if ($currentStep === 2) {
-        // Veritabanı kurulumu
-        $dbHost = trim($_POST['db_host'] ?? '');
-        $dbPort = trim($_POST['db_port'] ?? '');
-        $dbName = trim($_POST['db_name'] ?? '');
-        $dbUser = trim($_POST['db_user'] ?? '');
-        $dbPass = $_POST['db_pass'] ?? '';
-
-        $error = null;
-
-        if (empty($dbHost)) {
-            $error = "MySQL sunucu adresi boş olamaz!";
-        } elseif (empty($dbPort)) {
-            $error = "MySQL port boş olamaz!";
-        } elseif (empty($dbName)) {
-            $error = "Veritabanı adı boş olamaz!";
-        } elseif (empty($dbUser)) {
-            $error = "Veritabanı kullanıcı adı boş olamaz!";
-        }
-
-        if (!isset($error)) {
-            try {
-                $dsn = "mysql:host=$dbHost;port=$dbPort;charset=utf8mb4";
-                $pdo = new PDO($dsn, $dbUser, $dbPass);
-                $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-
-                $stmt = $pdo->query("SHOW DATABASES LIKE '$dbName'");
-                $dbExists = $stmt->rowCount() > 0;
-
-                if (!$dbExists) {
-                    try {
-                        $pdo->exec("CREATE DATABASE `$dbName` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-                    } catch (PDOException $e) {
-                        throw new Exception("Veritabanı oluşturulamadı. Lütfen hosting panelinizden veritabanını manuel olarak oluşturun. Hata: " . $e->getMessage());
-                    }
-                }
-
-                $pdo->exec("USE `$dbName`");
-
-                $sqlFile = __DIR__ . '/database.sql';
-                if (file_exists($sqlFile)) {
-                    $sql = file_get_contents($sqlFile);
-                    
-                    // Veritabanı adını değiştir
-                    $sql = str_replace('`stok_yonetim`', "`$dbName`", $sql);
-                    $sql = str_replace('stok_yonetim', $dbName, $sql);
-                    
-                    // CREATE DATABASE ve USE komutlarını kaldır
-                    $sql = preg_replace('/CREATE DATABASE[^;]+;/i', '', $sql);
-                    $sql = preg_replace('/USE[^;]+;/i', '', $sql);
-                    
-                    // Yorumları temizle (-- ile başlayan satırlar)
-                    $lines = explode("\n", $sql);
-                    $cleanedLines = [];
-                    foreach ($lines as $line) {
-                        $trimmedLine = trim($line);
-                        // Sadece -- ile başlayan satırları atla, inline comment'leri koru
-                        if (!preg_match('/^--/', $trimmedLine) && !empty($trimmedLine)) {
-                            $cleanedLines[] = $line;
-                        }
-                    }
-                    $sql = implode("\n", $cleanedLines);
-                    
-                    // Çok satırlı yorumları temizle (/* ... */)
-                    $sql = preg_replace('/\/\*.*?\*\//s', '', $sql);
-                    
-                    // Foreign key kontrollerini kapat
-                    $pdo->exec("SET FOREIGN_KEY_CHECKS = 0");
-                    $pdo->exec("SET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO'");
-                    $pdo->exec("SET time_zone = '+00:00'");
-                    
-                    // SQL'i noktalı virgüle göre ayır - daha basit ve güvenli yöntem
-                    $statements = [];
-                    $currentStatement = '';
-                    $inQuote = false;
-                    $quoteChar = '';
-                    $inComment = false;
-                    
-                    for ($i = 0; $i < strlen($sql); $i++) {
-                        $char = $sql[$i];
-                        $prevChar = $i > 0 ? $sql[$i-1] : '';
-                        $nextChar = $i < strlen($sql) - 1 ? $sql[$i+1] : '';
-                        
-                        // Inline comment kontrolü (--)
-                        if ($char === '-' && $nextChar === '-' && !$inQuote) {
-                            $inComment = true;
-                            continue;
-                        }
-                        
-                        // Yorum satırı sonu
-                        if ($inComment && ($char === "\n" || $char === "\r")) {
-                            $inComment = false;
-                            continue;
-                        }
-                        
-                        // Yorum içindeyse atla
-                        if ($inComment) {
-                            continue;
-                        }
-                        
-                        // Tırnak kontrolü
-                        if (($char === '"' || $char === "'") && $prevChar !== '\\') {
-                            if (!$inQuote) {
-                                $inQuote = true;
-                                $quoteChar = $char;
-                            } elseif ($char === $quoteChar) {
-                                $inQuote = false;
-                            }
-                        }
-                        
-                        // Noktalı virgül kontrolü
-                        if ($char === ';' && !$inQuote) {
-                            $currentStatement .= $char;
-                            $statements[] = trim($currentStatement);
-                            $currentStatement = '';
-                        } else {
-                            $currentStatement .= $char;
-                        }
-                    }
-                    
-                    // Son statement'ı ekle
-                    if (trim($currentStatement) !== '') {
-                        $statements[] = trim($currentStatement);
-                    }
-                    
-                    $createdTables = [];
-                    $errors = [];
-                    $dropStatements = [];
-                    $createStatements = [];
-                    $alterStatements = [];
-                    
-                    // Statement'ları kategorize et
-                    foreach ($statements as $statement) {
-                        $statement = trim($statement);
-                        
-                        // Boş statement'ları atla
-                        if (empty($statement)) {
-                            continue;
-                        }
-                        
-                        // SET komutlarını atla (zaten çalıştırdık)
-                        if (preg_match('/^SET\s+(FOREIGN_KEY_CHECKS|SQL_MODE|time_zone)/i', $statement)) {
-                            continue;
-                        }
-                        
-                        // Statement'ları kategorize et
-                        if (preg_match('/^DROP TABLE/i', $statement)) {
-                            $dropStatements[] = $statement;
-                        } elseif (preg_match('/^CREATE TABLE/i', $statement)) {
-                            $createStatements[] = $statement;
-                        } elseif (preg_match('/^ALTER TABLE/i', $statement)) {
-                            $alterStatements[] = $statement;
-                        }
-                    }
-                    
-                    // Önce DROP işlemlerini yap
-                    foreach ($dropStatements as $statement) {
-                        try {
-                            $pdo->exec($statement);
-                        } catch (PDOException $e) {
-                            // DROP hataları önemli değil
-                            error_log("DROP Warning: " . $e->getMessage());
-                        }
-                    }
-                    
-                    // Sonra CREATE işlemlerini yap
-                    foreach ($createStatements as $statement) {
-                        try {
-                            $pdo->exec($statement);
-                            
-                            if (preg_match('/CREATE TABLE\s+`?(\w+)`?/i', $statement, $matches)) {
-                                $tableName = $matches[1];
-                                $createdTables[] = $tableName;
-                                error_log("✓ Tablo oluşturuldu: $tableName");
-                            }
-                        } catch (PDOException $e) {
-                            $errorMsg = $e->getMessage();
-                            
-                            // Duplicate hatalarını görmezden gel
-                            if (strpos($errorMsg, 'Duplicate') === false && 
-                                strpos($errorMsg, 'already exists') === false) {
-                                $errors[] = "CREATE hatası: " . $errorMsg . " | " . substr($statement, 0, 100);
-                                error_log("✗ CREATE Hatası: " . $errorMsg);
-                            }
-                        }
-                    }
-                    
-                    // En son ALTER işlemlerini yap (Foreign Keys)
-                    foreach ($alterStatements as $statement) {
-                        try {
-                            $pdo->exec($statement);
-                            error_log("✓ Foreign key eklendi");
-                        } catch (PDOException $e) {
-                            // Foreign key hataları genelde sorun değil
-                            error_log("ALTER Warning: " . $e->getMessage());
-                        }
-                    }
-                    
-                    // Foreign key kontrollerini tekrar aç
-                    $pdo->exec("SET FOREIGN_KEY_CHECKS = 1");
-                    
-                    // Oluşturulan tabloları kontrol et
-                    $stmt = $pdo->query("SHOW TABLES");
-                    $actualTables = $stmt->fetchAll(PDO::FETCH_COLUMN);
-                    
-                    error_log("Toplam oluşturulan tablo sayısı: " . count($actualTables));
-                    error_log("Tablolar: " . implode(', ', $actualTables));
-                    
-                    // Beklenen tablolar
-                    $expectedTables = [
-                        'users', 'categories', 'units', 'warehouses', 'locations',
-                        'suppliers', 'customers', 'products', 'stocks', 'stock_movements',
-                        'campaigns', 'purchase_orders', 'purchase_order_items',
-                        'sales', 'sale_items', 'notifications'
-                    ];
-                    
-                    $missingTables = array_diff($expectedTables, $actualTables);
-                    
-                    if (count($actualTables) < 10) {
-                        $errorDetail = "Sadece " . count($actualTables) . " tablo oluşturuldu. ";
-                        $errorDetail .= "Oluşturulan tablolar: " . implode(', ', $actualTables);
-                        
-                        if (!empty($missingTables)) {
-                            $errorDetail .= "<br><br>Eksik tablolar: " . implode(', ', $missingTables);
-                        }
-                        
-                        if (!empty($errors)) {
-                            $errorDetail .= "<br><br>Hatalar:<br>" . implode('<br>', array_slice($errors, 0, 5));
-                        }
-                        
-                        throw new Exception("Veritabanı kurulumu tamamlanamadı. " . $errorDetail);
-                    }
-                } else {
-                    throw new Exception("database.sql dosyası bulunamadı!");
-                }
-
-                $envContent = "NODE_ENV=production\n";
-                $envContent .= "PORT=5001\n\n";
-                $envContent .= "DB_HOST=$dbHost\n";
-                $envContent .= "DB_PORT=$dbPort\n";
-                $envContent .= "DB_NAME=$dbName\n";
-                $envContent .= "DB_USER=$dbUser\n";
-                $envContent .= "DB_PASSWORD=$dbPass\n\n";
-                $envContent .= "JWT_SECRET=" . bin2hex(random_bytes(32)) . "\n";
-                $envContent .= "JWT_REFRESH_SECRET=" . bin2hex(random_bytes(32)) . "\n";
-                $envContent .= "JWT_EXPIRE=7d\n";
-                $envContent .= "JWT_REFRESH_EXPIRE=30d\n\n";
-                $frontendUrl = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'];
-                $envContent .= "FRONTEND_URL=$frontendUrl\n";
-
-                file_put_contents(__DIR__ . '/backend/.env', $envContent);
-
-                $_SESSION['db_config'] = compact('dbHost', 'dbPort', 'dbName', 'dbUser', 'dbPass');
-
-                header('Location: ?step=3');
-                exit;
-            } catch (PDOException $e) {
-                $errorMsg = $e->getMessage();
-                if (strpos($errorMsg, 'Access denied') !== false) {
-                    if (strpos($errorMsg, 'database') !== false) {
-                        $error = "VERİTABANI ERİŞİM HATASI!<br><br>";
-                        $error .= "Girdiğiniz veritabanı adı: <strong>$dbName</strong><br>";
-                        $error .= "Kullanıcı adı: <strong>$dbUser</strong><br><br>";
-                        $error .= "<strong>Kontrol Edin:</strong><br>";
-                        $error .= "1. Veritabanı adını TAM olarak yazdınız mı?<br>";
-                        $error .= "2. Kullanıcı adını TAM olarak yazdınız mı?<br>";
-                        $error .= "3. cPanel'de kullanıcıya bu veritabanı için TÜM YETKİLER verildi mi?<br>";
-                        $error .= "4. Şifre doğru mu?<br><br>";
-                        $error .= "<em>Teknik detay: " . htmlspecialchars($errorMsg) . "</em>";
-                    } else {
-                        $error = "MySQL bağlantı hatası: Kullanıcı adı veya şifre yanlış!<br>";
-                        $error .= "Kullanıcı: <strong>$dbUser</strong><br><br>";
-                        $error .= "<em>" . htmlspecialchars($errorMsg) . "</em>";
-                    }
-                } elseif (strpos($errorMsg, 'Unknown database') !== false) {
-                    $error = "VERİTABANI BULUNAMADI!<br><br>";
-                    $error .= "Aradığınız veritabanı: <strong>$dbName</strong><br><br>";
-                    $error .= "Lütfen cPanel > MySQL Databases bölümünden veritabanınızı kontrol edin.";
-                } else {
-                    $error = "Veritabanı hatası: " . htmlspecialchars($errorMsg);
-                }
-            } catch (Exception $e) {
-                $error = "Kurulum hatası: " . htmlspecialchars($e->getMessage());
-            }
-        }
-    } elseif ($currentStep === 3) {
-        // Admin kullanıcı oluşturma
-        if (!isset($_SESSION['db_config'])) {
-            header('Location: ?step=2');
-            exit;
-        }
-
-        $username = $_POST['username'] ?? 'admin';
-        $password = $_POST['password'] ?? '';
-        $email = $_POST['email'] ?? 'admin@example.com';
-        $fullName = $_POST['full_name'] ?? 'Sistem Yöneticisi';
-        
-        $nameParts = explode(' ', trim($fullName), 2);
-        $firstName = $nameParts[0] ?? 'Sistem';
-        $lastName = $nameParts[1] ?? 'Yöneticisi';
-
-        $error = null;
-
-        if (empty($password)) {
-            $error = "Şifre boş olamaz!";
-        } elseif (strlen($password) < 6) {
-            $error = "Şifre en az 6 karakter olmalıdır!";
-        } else {
-            try {
-                $config = $_SESSION['db_config'];
-                $dsn = "mysql:host={$config['dbHost']};port={$config['dbPort']};dbname={$config['dbName']};charset=utf8mb4";
-                $pdo = new PDO($dsn, $config['dbUser'], $config['dbPass']);
-                $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-
-                $passwordHash = password_hash($password, PASSWORD_BCRYPT);
-
-                $stmt = $pdo->prepare("INSERT INTO users (username, password, email, first_name, last_name, role, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'admin', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
-                $stmt->execute([$username, $passwordHash, $email, $firstName, $lastName]);
-
-                $_SESSION['admin_created'] = true;
-                $_SESSION['admin_username'] = $username;
-
-                header('Location: ?step=4');
-                exit;
-            } catch (Exception $e) {
-                $error = "Kullanıcı oluşturma hatası: " . $e->getMessage();
-            }
-        }
-    }
-}
-
-// Session kontrolleri
-if ($currentStep === 3 && !isset($_SESSION['db_config'])) {
-    header('Location: ?step=2');
-    exit;
-}
-
-if ($currentStep === 4 && !isset($_SESSION['admin_created'])) {
-    header('Location: ?step=1');
-    exit;
-}
-?>
 <!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stok Yönetim Sistemi - Kurulum</title>
+    <title>Stok Yönetim Sistemi - SQLite Kurulum</title>
     <style>
         * {
             margin: 0;
@@ -696,16 +258,45 @@ if ($currentStep === 4 && !isset($_SESSION['admin_created'])) {
             color: #999;
             margin-top: 5px;
         }
+
+        .demo-info {
+            background: #e8f4f8;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #0891b2;
+            margin: 20px 0;
+        }
+
+        .demo-info h3 {
+            color: #0891b2;
+            margin-bottom: 10px;
+        }
+
+        .demo-credentials {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: monospace;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
 <?php
+session_start();
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+// Install lock kontrolü kaldırıldı - kurulum sonrası install.php silinecek
+
+$currentStep = isset($_GET['step']) ? (int)$_GET['step'] : 1;
+
 // Adım 1: Sistem Gereksinimleri
 if ($currentStep === 1) {
     $phpVersion = PHP_VERSION;
     $requiredExtensions = [
         'pdo' => 'PDO Extension',
-        'pdo_mysql' => 'PDO MySQL Driver',
+        'pdo_sqlite' => 'PDO SQLite Driver',
         'json' => 'JSON Extension',
         'mbstring' => 'Multibyte String',
         'curl' => 'cURL Extension',
@@ -715,6 +306,7 @@ if ($currentStep === 1) {
     $checks = [];
     $allPassed = true;
 
+    // PHP versiyon kontrolü
     $phpOk = version_compare($phpVersion, '7.4.0', '>=');
     $checks[] = [
         'name' => 'PHP Versiyonu (≥ 7.4)',
@@ -724,6 +316,7 @@ if ($currentStep === 1) {
 
     if (!$phpOk) $allPassed = false;
 
+    // Extension kontrolleri
     foreach ($requiredExtensions as $ext => $name) {
         $status = extension_loaded($ext);
         $checks[] = [
@@ -734,7 +327,30 @@ if ($currentStep === 1) {
         if (!$status) $allPassed = false;
     }
 
-    $dirs = ['backend', 'backend/uploads'];
+    // Node.js kontrolü
+    exec('node --version 2>&1', $nodeOutput, $nodeReturn);
+    $nodeOk = $nodeReturn === 0;
+    $nodeVersion = $nodeOk ? trim($nodeOutput[0]) : 'Kurulu değil';
+    $checks[] = [
+        'name' => 'Node.js (≥ 14.0)',
+        'value' => $nodeVersion,
+        'status' => $nodeOk
+    ];
+    if (!$nodeOk) $allPassed = false;
+
+    // NPM kontrolü
+    exec('npm --version 2>&1', $npmOutput, $npmReturn);
+    $npmOk = $npmReturn === 0;
+    $npmVersion = $npmOk ? trim($npmOutput[0]) : 'Kurulu değil';
+    $checks[] = [
+        'name' => 'NPM Package Manager',
+        'value' => $npmVersion,
+        'status' => $npmOk
+    ];
+    if (!$npmOk) $allPassed = false;
+
+    // Yazma izinleri
+    $dirs = ['backend', 'backend/uploads', '.'];
     foreach ($dirs as $dir) {
         $path = __DIR__ . '/' . $dir;
         $writable = is_writable($path);
@@ -749,7 +365,7 @@ if ($currentStep === 1) {
     echo '<div class="container">
             <div class="header">
                 <h1>📦 Stok Yönetim Sistemi</h1>
-                <p>Otomatik Kurulum Sihirbazı</p>
+                <p>SQLite Otomatik Kurulum Sihirbazı</p>
             </div>
 
             <div class="progress">
@@ -759,20 +375,22 @@ if ($currentStep === 1) {
                 </div>
                 <div class="step">
                     <div class="step-number">2</div>
-                    <div class="step-label">Veritabanı</div>
+                    <div class="step-label">Kurulum</div>
                 </div>
                 <div class="step">
                     <div class="step-number">3</div>
-                    <div class="step-label">Admin</div>
-                </div>
-                <div class="step">
-                    <div class="step-number">4</div>
                     <div class="step-label">Tamamlandı</div>
                 </div>
             </div>
 
             <div class="content">
-                <h2 style="margin-bottom: 25px;">Sistem Gereksinimleri</h2>';
+                <h2 style="margin-bottom: 25px;">Sistem Gereksinimleri</h2>
+
+                <div class="alert alert-success">
+                    <strong>🎉 SQLite Kurulum!</strong><br>
+                    Bu kurulum SQLite veritabanı kullanır - MySQL kurulumu gerekmez!<br>
+                    Demo kullanıcı ve veriler otomatik olarak hazır gelir.
+                </div>';
 
     if (!$allPassed) {
         echo '<div class="alert alert-error">
@@ -795,22 +413,29 @@ if ($currentStep === 1) {
     }
     echo '</ul>';
 
+    if (!$allPassed) {
+        echo '<div class="alert alert-warning">
+                <strong>Node.js Kurulum:</strong><br>
+                Node.js kurulu değilse, <a href="https://nodejs.org" target="_blank">nodejs.org</a> adresinden indirip kurun.
+              </div>';
+    }
+
     echo '<form method="get" style="margin-top: 30px;">
             <input type="hidden" name="step" value="2">
             <button type="submit" class="btn"' . ($allPassed ? '' : ' disabled') . '>
-                Devam Et →
+                Kuruluma Başla →
             </button>
           </form>
         </div>
       </div>';
 }
 
-// Adım 2: Veritabanı Ayarları
+// Adım 2: Otomatik Kurulum
 elseif ($currentStep === 2) {
     echo '<div class="container">
             <div class="header">
                 <h1>📦 Stok Yönetim Sistemi</h1>
-                <p>Otomatik Kurulum Sihirbazı</p>
+                <p>SQLite Otomatik Kurulum Sihirbazı</p>
             </div>
 
             <div class="progress">
@@ -820,73 +445,81 @@ elseif ($currentStep === 2) {
                 </div>
                 <div class="step active">
                     <div class="step-number">2</div>
-                    <div class="step-label">Veritabanı</div>
+                    <div class="step-label">Kurulum</div>
                 </div>
                 <div class="step">
                     <div class="step-number">3</div>
-                    <div class="step-label">Admin</div>
-                </div>
-                <div class="step">
-                    <div class="step-number">4</div>
                     <div class="step-label">Tamamlandı</div>
                 </div>
             </div>
 
             <div class="content">
-                <h2 style="margin-bottom: 25px;">Veritabanı Yapılandırması</h2>';
+                <h2 style="margin-bottom: 25px;">Otomatik Kurulum</h2>
 
-    if (isset($error)) {
-        echo "<div class='alert alert-error'>$error</div>";
-    }
+                <div id="installationStatus" class="alert alert-warning">
+                    <strong>⏳ Kurulum başlatılıyor...</strong><br>
+                    Lütfen bekleyin, bu işlem birkaç dakika sürebilir.
+                </div>
 
-    echo '<form method="post">
-            <div class="form-group">
-                <label>MySQL Sunucu Adresi *</label>
-                <input type="text" name="db_host" value="localhost" required>
-                <div class="small-text">Genellikle "localhost" kullanılır</div>
+                <div id="installationOutput" style="display:none; background:#f8f9fa; padding:15px; border-radius:8px; margin:20px 0; font-family:monospace; font-size:12px; max-height:300px; overflow-y:auto; white-space: pre-wrap;"></div>
+
+                <div id="nextStepBtn" style="display:none;">
+                    <a href="?step=3" class="btn btn-success" style="text-decoration:none;">
+                        Kurulum Tamamlandı - Devam Et →
+                    </a>
+                </div>
+
+                <script>
+                async function performInstallation() {
+                    const status = document.getElementById("installationStatus");
+                    const output = document.getElementById("installationOutput");
+                    const nextBtn = document.getElementById("nextStepBtn");
+
+                    try {
+                        status.innerHTML = "<strong>⏳ SQLite veritabanı kopyalanıyor...</strong>";
+                        
+                        const response = await fetch("install-backend.php", {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json"
+                            },
+                            body: JSON.stringify({action: "install"})
+                        });
+                        
+                        const data = await response.json();
+                        
+                        output.style.display = "block";
+                        output.textContent = data.output || data.message;
+
+                        if (data.success) {
+                            status.className = "alert alert-success";
+                            status.innerHTML = "<strong>✅ Kurulum Başarılı!</strong><br>" + data.message;
+                            nextBtn.style.display = "block";
+                        } else {
+                            status.className = "alert alert-error";
+                            status.innerHTML = "<strong>❌ Kurulum Hatası:</strong><br>" + data.message;
+                        }
+                    } catch (error) {
+                        status.className = "alert alert-error";
+                        status.innerHTML = "<strong>❌ Bağlantı Hatası:</strong><br>" + error.message;
+                        output.style.display = "block";
+                        output.textContent = "Hata: " + error.message;
+                    }
+                }
+
+                // Kurulumu otomatik başlat
+                performInstallation();
+                </script>
             </div>
-
-            <div class="form-group">
-                <label>MySQL Port *</label>
-                <input type="text" name="db_port" value="3306" required>
-                <div class="small-text">Varsayılan: 3306</div>
-            </div>
-
-            <div class="form-group">
-                <label>Veritabanı Adı (TAM AD ile) *</label>
-                <input type="text" name="db_name" value="" placeholder="rea340stinfo_stokyonetim" required>
-                <div class="small-text" style="color:#c33;font-weight:600;">⚠️ cPanel\'den oluşturduğunuz TAM veritabanı adını girin (prefix ile birlikte)</div>
-            </div>
-
-            <div class="form-group">
-                <label>Veritabanı Kullanıcı Adı (TAM AD ile) *</label>
-                <input type="text" name="db_user" value="" placeholder="rea340stinfo_stokuser" required>
-                <div class="small-text" style="color:#c33;font-weight:600;">⚠️ cPanel\'den oluşturduğunuz TAM kullanıcı adını girin (prefix ile birlikte)</div>
-            </div>
-
-            <div class="form-group">
-                <label>Veritabanı Şifresi *</label>
-                <input type="password" name="db_pass" required>
-                <div class="small-text">Veritabanı kullanıcısının şifresi</div>
-            </div>
-
-            <button type="submit" class="btn">Veritabanını Kur ve Devam Et →</button>
-          </form>
-        </div>
-      </div>';
+          </div>';
 }
 
-// Adım 3: Admin Kullanıcısı
+// Adım 3: Tamamlandı
 elseif ($currentStep === 3) {
-    if (!isset($_SESSION['db_config'])) {
-        header('Location: ?step=2');
-        exit;
-    }
-
     echo '<div class="container">
             <div class="header">
                 <h1>📦 Stok Yönetim Sistemi</h1>
-                <p>Otomatik Kurulum Sihirbazı</p>
+                <p>SQLite Otomatik Kurulum Sihirbazı</p>
             </div>
 
             <div class="progress">
@@ -896,85 +529,7 @@ elseif ($currentStep === 3) {
                 </div>
                 <div class="step completed">
                     <div class="step-number">✓</div>
-                    <div class="step-label">Veritabanı</div>
-                </div>
-                <div class="step active">
-                    <div class="step-number">3</div>
-                    <div class="step-label">Admin</div>
-                </div>
-                <div class="step">
-                    <div class="step-number">4</div>
-                    <div class="step-label">Tamamlandı</div>
-                </div>
-            </div>
-
-            <div class="content">
-                <h2 style="margin-bottom: 25px;">Admin Kullanıcısı Oluştur</h2>';
-
-    if (isset($error)) {
-        echo "<div class='alert alert-error'>$error</div>";
-    }
-
-    echo '<div class="alert alert-warning">
-            <strong>Önemli!</strong> Bu bilgileri güvenli bir yerde saklayın.
-          </div>
-
-          <form method="post">
-            <div class="form-group">
-                <label>Kullanıcı Adı</label>
-                <input type="text" name="username" value="admin" required>
-            </div>
-
-            <div class="form-group">
-                <label>Şifre</label>
-                <input type="password" name="password" required minlength="6">
-                <div class="small-text">En az 6 karakter</div>
-            </div>
-
-            <div class="form-group">
-                <label>E-posta</label>
-                <input type="email" name="email" value="admin@example.com" required>
-            </div>
-
-            <div class="form-group">
-                <label>Tam Ad</label>
-                <input type="text" name="full_name" value="Sistem Yöneticisi" required>
-            </div>
-
-            <button type="submit" class="btn">Admin Oluştur ve Kurulumu Tamamla →</button>
-          </form>
-        </div>
-      </div>';
-}
-
-// Adım 4: Tamamlandı
-elseif ($currentStep === 4) {
-    if (!isset($_SESSION['admin_created'])) {
-        header('Location: ?step=1');
-        exit;
-    }
-
-    $username = $_SESSION['admin_username'] ?? 'admin';
-    session_destroy();
-
-    echo '<div class="container">
-            <div class="header">
-                <h1>📦 Stok Yönetim Sistemi</h1>
-                <p>Otomatik Kurulum Sihirbazı</p>
-            </div>
-
-            <div class="progress">
-                <div class="step completed">
-                    <div class="step-number">✓</div>
-                    <div class="step-label">Gereksinimler</div>
-                </div>
-                <div class="step completed">
-                    <div class="step-number">✓</div>
-                    <div class="step-label">Veritabanı</div>
-                </div>
-                <div class="step completed">
-                    <div class="step-number">✓</div>
-                    <div class="step-label">Admin</div>
+                    <div class="step-label">Kurulum</div>
                 </div>
                 <div class="step completed">
                     <div class="step-number">✓</div>
@@ -986,27 +541,38 @@ elseif ($currentStep === 4) {
                 <div class="completion">
                     <div class="completion-icon">🎉</div>
                     <h2>Kurulum Başarıyla Tamamlandı!</h2>
-                    <p>Stok Yönetim Sistemi başarıyla kuruldu ve kullanıma hazır.</p>
-                    <p><strong>Kullanıcı Adınız:</strong> ' . htmlspecialchars($username) . '</p>
+                    <p>Stok Yönetim Sistemi SQLite ile başarıyla kuruldu ve kullanıma hazır.</p>
 
-                    <div id="backendStatus" class="alert alert-success" style="text-align: left; margin: 30px 0;">
+                    <div class="demo-info">
+                        <h3>🔑 Demo Giriş Bilgileri</h3>
+                        <p>Sisteme giriş yapmak için aşağıdaki demo hesabı kullanabilirsiniz:</p>
+                        <div class="demo-credentials">
+                            <strong>E-posta:</strong> admin@stok.com<br>
+                            <strong>Şifre:</strong> admin123
+                        </div>
+                        <p style="margin-top: 10px; font-size: 12px; color: #666;">
+                            ⚠️ Güvenlik için ilk girişten sonra şifrenizi değiştirin.
+                        </p>
+                    </div>
+
+                    <div id="backendStatus" class="alert alert-warning" style="text-align: left; margin: 30px 0;">
                         <strong>Son Adım:</strong><br><br>
                         <strong>Backend Sunucusunu Başlat:</strong><br>
-                        Aşağıdaki butona tıklayarak backend sunucusunu otomatik başlatabilirsiniz.
+                        Aşağıdaki butona tıklayarak backend sunucusunu otomatik başlatın.
                     </div>
 
                     <button id="startBackendBtn" class="btn" onclick="startBackend()" style="margin-bottom: 20px;">
                         🚀 Backend\'i Başlat
                     </button>
 
-                    <div id="backendOutput" style="display:none; background:#f8f9fa; padding:15px; border-radius:8px; margin:20px 0; text-align:left; font-family:monospace; font-size:12px; max-height:200px; overflow-y:auto;"></div>
+                    <div id="backendOutput" style="display:none; background:#f8f9fa; padding:15px; border-radius:8px; margin:20px 0; text-align:left; font-family:monospace; font-size:12px; max-height:200px; overflow-y:auto; white-space: pre-wrap;"></div>
 
                     <div style="background:#fff3cd;padding:15px;border-radius:8px;border:1px solid #ffeaa7;margin:20px 0;text-align:left;">
                         <strong>⚠️ Güvenlik Uyarısı:</strong><br>
                         Kurulum tamamlandıktan sonra <code>install.php</code> dosyasını sunucunuzdan silmeniz önerilir.
                     </div>
 
-                    <a href="backend/public/index.html" id="goToAppBtn" class="btn btn-success" style="text-decoration:none;display:none;">
+                    <a href="index.html" id="goToAppBtn" class="btn btn-success" style="text-decoration:none;display:none;">
                         Giriş Sayfasına Git →
                     </a>
                 </div>
@@ -1028,7 +594,7 @@ elseif ($currentStep === 4) {
                         const data = await response.json();
 
                         output.style.display = "block";
-                        output.innerHTML = "<strong>Çıktı:</strong><br>" + (data.output || data.message).replace(/\\n/g, "<br>");
+                        output.textContent = data.output || data.message;
 
                         if (data.success) {
                             status.className = "alert alert-success";
@@ -1053,7 +619,7 @@ elseif ($currentStep === 4) {
                         status.className = "alert alert-error";
                         status.innerHTML = "<strong>❌ Bağlantı Hatası:</strong><br>" + error.message;
                         output.style.display = "block";
-                        output.innerHTML = "<strong>Hata:</strong> " + error.message;
+                        output.textContent = "Hata: " + error.message;
                         btn.disabled = false;
                         btn.innerHTML = "🔄 Tekrar Dene";
                     }
