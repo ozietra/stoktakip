@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 const { sequelize, testConnection } = require('./config/database');
+const { initDatabase } = require('./init-db');
 const cronJobs = require('./utils/cronJobs');
 const { handleDatabaseError, checkDatabaseHealth } = require('./middleware/dbErrorHandler');
 
@@ -132,6 +133,12 @@ const startServer = async () => {
     console.log('\n╔══════════════════════════════════════════════════════╗');
     console.log('║       🚀 BACKEND SERVER BAŞLATILIYOR...            ║');
     console.log('╚══════════════════════════════════════════════════════╝\n');
+    
+    // SQLite için veritabanı başlatma
+    if (process.env.DB_TYPE === 'sqlite') {
+      console.log('📍 Adım 0: SQLite Veritabanı Başlatılıyor...\n');
+      initDatabase();
+    }
     
     console.log('📍 Adım 1: Veritabanı Bağlantısı Test Ediliyor...\n');
     const isConnected = await testConnection();

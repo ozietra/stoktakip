@@ -2,11 +2,19 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "npm install && cd frontend && npm install && npm run build && cd ../backend && npm install && npm run build"
+    "buildCommand": "npm install && cd frontend && npm install && npm run build && cd ../backend && npm install && mkdir -p /app/backend/config"
   },
   "deploy": {
     "startCommand": "cd backend && npm start",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
+  },
+  "environments": {
+    "production": {
+      "variables": {
+        "NODE_ENV": "production",
+        "DB_TYPE": "sqlite"
+      }
+    }
   }
 }
