@@ -198,16 +198,34 @@ const startServer = async () => {
     server.keepAliveTimeout = 65000; // 65 seconds
     server.headersTimeout = 66000; // Must be greater than keepAliveTimeout
 
-    // Graceful shutdown
+    // Graceful shutdown - Railway deployment için optimize edildi
+    let isShuttingDown = false;
+    
     const gracefulShutdown = async (signal) => {
+      if (isShuttingDown) {
+        console.log(`${signal} zaten işleniyor, tekrar kapatma atlanıyor...`);
+        return;
+      }
+      
+      isShuttingDown = true;
       console.log(`\n${signal} alındı. Sunucu kapatılıyor...`);
+      
+      // Railway deployment sırasında SIGTERM normal, hemen kapatma
+      if (signal === 'SIGTERM' && process.env.RAILWAY_ENVIRONMENT) {
+        console.log('Railway deployment tespit edildi, hızlı kapatma...');
+        process.exit(0);
+        return;
+      }
       
       server.close(async () => {
         console.log('HTTP sunucusu kapatıldı');
         
         try {
-          await sequelize.close();
-          console.log('Veritabanı bağlantısı kapatıldı');
+          // Database bağlantısını sadece gerçek kapatma durumunda kapat
+          if (signal !== 'SIGTERM' || !process.env.RAILWAY_ENVIRONMENT) {
+            await sequelize.close();
+            console.log('Veritabanı bağlantısı kapatıldı');
+          }
           process.exit(0);
         } catch (error) {
           console.error('Kapatma hatası:', error);
@@ -215,14 +233,23 @@ const startServer = async () => {
         }
       });
 
-      // Force close after 10 seconds
+      // Force close after 15 seconds (Railway için daha uzun)
       setTimeout(() => {
         console.error('Zorla kapatılıyor...');
         process.exit(1);
-      }, 10000);
+      }, 15000);
     };
 
-    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    // Railway deployment sırasında SIGTERM'i daha toleranslı handle et
+    process.on('SIGTERM', () => {
+      if (process.env.RAILWAY_ENVIRONMENT) {
+        console.log('Railway SIGTERM alındı, deployment devam ediyor...');
+        // Railway deployment sırasında database bağlantısını kapatma
+        return;
+      }
+      gracefulShutdown('SIGTERM');
+    });
+    
     process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
     // Handle uncaught exceptions

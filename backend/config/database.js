@@ -29,7 +29,15 @@ if (dbDialect === 'sqlite') {
     pool: {
       max: 1,  // SQLite tek bağlantı kullanır
       min: 1,
-      idle: 10000
+      idle: 30000,
+      acquire: 60000,
+      evict: 1000
+    },
+    
+    // Connection retry logic
+    retry: {
+      max: 3,
+      timeout: 5000
     },
 
     // Model ayarları
